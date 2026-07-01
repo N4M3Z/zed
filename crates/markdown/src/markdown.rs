@@ -2480,11 +2480,21 @@ impl Element for MarkdownElement {
                         }
                         MarkdownTag::Emphasis => builder.push_text_style(TextStyleRefinement {
                             font_style: Some(FontStyle::Italic),
+                            color: self
+                                .style
+                                .syntax
+                                .style_for_name("emphasis")
+                                .and_then(|highlight| highlight.color),
                             ..Default::default()
                         }),
                         MarkdownTag::Strong => builder.push_text_style(TextStyleRefinement {
                             font_weight: Some(FontWeight::BOLD),
-                            color: Some(cx.theme().colors().text),
+                            color: self
+                                .style
+                                .syntax
+                                .style_for_name("emphasis.strong")
+                                .and_then(|highlight| highlight.color)
+                                .or(Some(cx.theme().colors().text)),
                             ..Default::default()
                         }),
                         MarkdownTag::Strikethrough => {
