@@ -183,6 +183,12 @@ pub struct TerminalSettingsContent {
     /// Default: 45
     #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
     pub minimum_contrast: Option<f32>,
+    /// Whether to draw bold text in the theme's bright foreground color
+    /// (`terminal.bright_foreground`) when the cell has no explicit foreground
+    /// color, matching Alacritty's `draw_bold_text_with_bright_colors`.
+    ///
+    /// Default: false
+    pub draw_bold_text_with_bright_colors: Option<bool>,
     /// Whether to show a badge on the terminal panel icon with the count of open terminals.
     ///
     /// Default: false

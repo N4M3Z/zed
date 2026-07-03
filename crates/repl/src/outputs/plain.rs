@@ -361,10 +361,20 @@ impl Render for TerminalOutput {
         let terminal = self.terminal.clone();
 
         let text_style = text_style(window, cx);
-        let minimum_contrast = TerminalSettings::get_global(cx).minimum_contrast;
+        let terminal_settings = TerminalSettings::get_global(cx);
+        let minimum_contrast = terminal_settings.minimum_contrast;
+        let draw_bold_text_with_bright_colors = terminal_settings.draw_bold_text_with_bright_colors;
         let (rects, batched_text_runs, block_element_rects) =
             terminal.read(cx).with_renderable_cells(|cells| {
-                TerminalElement::layout_grid(cells, 0, &text_style, None, minimum_contrast, cx)
+                TerminalElement::layout_grid(
+                    cells,
+                    0,
+                    &text_style,
+                    None,
+                    minimum_contrast,
+                    draw_bold_text_with_bright_colors,
+                    cx,
+                )
             });
 
         // lines are 0-indexed, so we must add 1 to get the number of lines

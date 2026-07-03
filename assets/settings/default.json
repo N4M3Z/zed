@@ -2037,6 +2037,10 @@
     // Most terminal themes have APCA values of 40-70.
     // A value of 45 preserves colorful themes while ensuring legibility.
     "minimum_contrast": 45,
+    // Whether to draw bold text in the theme's bright foreground color
+    // (`terminal.bright_foreground`) when the cell has no explicit foreground
+    // color, matching Alacritty's `draw_bold_text_with_bright_colors`.
+    "draw_bold_text_with_bright_colors": false,
     // Regexes used to identify paths for hyperlink navigation. Supports optional named capture
     // groups `path`, `line`, `column`, and `link`. If none of these are present, the entire match
     // is the hyperlink target. If `path` is present, it is the hyperlink target, along with `line`

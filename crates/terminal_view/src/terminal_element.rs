@@ -441,6 +441,7 @@ impl TerminalElement {
         text_style: &TextStyle,
         hyperlink: Option<(HighlightStyle, &Range)>,
         minimum_contrast: f32,
+        draw_bold_text_with_bright_colors: bool,
         cx: &App,
     ) -> (
         Vec<LayoutRect>,
@@ -528,6 +529,7 @@ impl TerminalElement {
                             text_style,
                             hyperlink,
                             minimum_contrast,
+                            draw_bold_text_with_bright_colors,
                         );
 
                         let cell_point = LayoutPoint::new(display_line, point.column as i32);
@@ -874,7 +876,16 @@ impl TerminalElement {
         text_style: &TextStyle,
         hyperlink: Option<(HighlightStyle, &Range)>,
         minimum_contrast: f32,
+        draw_bold_text_with_bright_colors: bool,
     ) -> TextRun {
+        let fg = if draw_bold_text_with_bright_colors
+            && cell.is_bold()
+            && matches!(fg, Color::Named(NamedColor::Foreground))
+        {
+            Color::Named(NamedColor::BrightForeground)
+        } else {
+            fg
+        };
         let skip_contrast = Self::is_app_chosen_exact_color(&fg);
         let mut fg = convert_color(&fg, colors);
         let bg = convert_color(&bg, colors);
@@ -1207,6 +1218,8 @@ impl Element for TerminalElement {
 
                 let terminal_settings = TerminalSettings::get_global(cx);
                 let minimum_contrast = terminal_settings.minimum_contrast;
+                let draw_bold_text_with_bright_colors =
+                    terminal_settings.draw_bold_text_with_bright_colors;
 
                 let font_family = terminal_settings.font_family.as_ref().map_or_else(
                     || settings.buffer_font.family.clone(),
@@ -1448,6 +1461,7 @@ impl Element for TerminalElement {
                             .as_ref()
                             .map(|last_hovered_word| (link_style, &last_hovered_word.word_match)),
                         minimum_contrast,
+                        draw_bold_text_with_bright_colors,
                         cx,
                     )
                 } else {
@@ -1479,6 +1493,7 @@ impl Element for TerminalElement {
                             .as_ref()
                             .map(|last_hovered_word| (link_style, &last_hovered_word.word_match)),
                         minimum_contrast,
+                        draw_bold_text_with_bright_colors,
                         cx,
                     )
                 };
