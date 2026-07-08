@@ -911,6 +911,16 @@ actions!(
         ToggleReviewCommentsExpanded,
         /// Sends all stored review comments to the Agent panel.
         SendReviewToAgent,
+        /// Opens the review annotation popup, which inserts a `[KIND] text`
+        /// review marker as a comment line above the current selection, or
+        /// edits the marker already on that line.
+        InsertReviewAnnotation,
+        /// Moves the cursor to the next review annotation marker.
+        GoToNextReviewAnnotation,
+        /// Moves the cursor to the previous review annotation marker.
+        GoToPreviousReviewAnnotation,
+        /// Deletes the review annotation marker on the current line.
+        DeleteReviewAnnotation,
         /// Toggles the selection menu.
         ToggleSelectionMenu,
         /// Toggles soft wrap mode.

@@ -305,6 +305,7 @@ impl VsCodeSettings {
             scrollbar: self.scrollbar_content(),
             search: self.search_content(),
             search_wrap: None,
+            review_annotation_types: None,
             seed_search_query_from_cursor: self.read_enum(
                 "editor.find.seedSearchStringFromSelection",
                 |s| match s {

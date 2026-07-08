@@ -740,6 +740,9 @@
   "relative_line_numbers": "disabled",
   // If 'search_wrap' is disabled, search result do not wrap around the end of the file.
   "search_wrap": true,
+  // Review annotation comment types, in popup cycle order. The first entry
+  // is the type initially selected.
+  "review_annotation_types": ["ISSUE", "SUGGESTION", "NOTE", "PRAISE"],
   // Search options to enable by default when opening new project and buffer searches.
   "search": {
     // Whether to show the project search button in the status bar.

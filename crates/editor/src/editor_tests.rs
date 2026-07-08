@@ -39978,6 +39978,619 @@ fn test_review_comment_take_all(cx: &mut TestAppContext) {
     });
 }
 
+fn submit_review_annotation_with_text(cx: &mut EditorTestContext, kind_cycles: usize, text: &str) {
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        for _ in 0..kind_cycles {
+            editor.cycle_review_annotation_kind(false, cx);
+        }
+        let prompt_editor = editor
+            .review_annotation_prompt_editor()
+            .expect("popup should be open")
+            .clone();
+        prompt_editor.update(cx, |prompt_editor, cx| {
+            prompt_editor.set_text(text, window, cx);
+        });
+        editor.submit_review_annotation(window, cx);
+    });
+}
+
+#[gpui::test]
+async fn test_review_annotation_line_comment_insert(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("fn main() {\n    let ˇx = 1;\n}\n");
+
+    submit_review_annotation_with_text(&mut cx, 0, "check this");
+
+    assert_eq!(
+        cx.buffer_text(),
+        "fn main() {\n    // [ISSUE] check this\n    let x = 1;\n}\n"
+    );
+    cx.update_editor(|editor, _window, _cx| {
+        assert!(
+            editor.review_annotation_prompt_editor().is_none(),
+            "popup should close after submit"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_review_annotation_kind_cycle_and_undo(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("fn main() {\n    let ˇx = 1;\n}\n");
+
+    submit_review_annotation_with_text(&mut cx, 2, "can panic");
+
+    assert_eq!(
+        cx.buffer_text(),
+        "fn main() {\n    // [NOTE] can panic\n    let x = 1;\n}\n"
+    );
+
+    cx.update_editor(|editor, window, cx| {
+        editor.undo(&Undo, window, cx);
+    });
+    assert_eq!(
+        cx.buffer_text(),
+        "fn main() {\n    let x = 1;\n}\n",
+        "one undo should remove the whole marker line"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_block_comment_insert(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    let html_comment_lang = Arc::new(Language::new(
+        LanguageConfig {
+            name: "Markdown".into(),
+            block_comment: Some(language::BlockCommentConfig {
+                start: "<!--".into(),
+                end: "-->".into(),
+                prefix: "".into(),
+                tab_size: 1,
+            }),
+            ..LanguageConfig::default()
+        },
+        None,
+    ));
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(html_comment_lang), cx));
+    cx.set_state("# Title\nˇBody\n");
+
+    submit_review_annotation_with_text(&mut cx, 0, "tighten this");
+
+    assert_eq!(
+        cx.buffer_text(),
+        "# Title\n<!-- [ISSUE] tighten this -->\nBody\n"
+    );
+}
+
+fn block_comment_lang() -> Arc<Language> {
+    Arc::new(Language::new(
+        LanguageConfig {
+            name: "Markdown".into(),
+            block_comment: Some(language::BlockCommentConfig {
+                start: "<!--".into(),
+                end: "-->".into(),
+                prefix: "".into(),
+                tab_size: 1,
+            }),
+            ..LanguageConfig::default()
+        },
+        None,
+    ))
+}
+
+#[gpui::test]
+async fn test_review_annotation_ignores_an_unclosed_block_comment_line(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(block_comment_lang()), cx));
+    // The comment closes mid-line, so the rest is content, not a marker.
+    cx.set_state("<!-- [ISSUE] explanation --> ˇimportant content\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.delete_review_annotation(&DeleteReviewAnnotation, window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "<!-- [ISSUE] explanation --> important content\n",
+        "a block comment must close at end of line or the row is not an annotation"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_ignores_a_second_block_comment_on_the_row(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(block_comment_lang()), cx));
+    // Ends with a terminator, but the body carries one too, so this is content
+    // between two comments rather than an annotation.
+    cx.set_state("<!-- [NOTE] note --> ˇvisible page text -->\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.delete_review_annotation(&DeleteReviewAnnotation, window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "<!-- [NOTE] note --> visible page text -->\n",
+        "the comment must be the only one on the row"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_requires_a_separator_after_the_kind(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("// [NOTE]worthy ˇbehavior\nlet x = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.delete_review_annotation(&DeleteReviewAnnotation, window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "// [NOTE]worthy behavior\nlet x = 1;\n",
+        "the bracket must be a whole token, or ordinary comments become deletable"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_refuses_text_closing_the_block_comment(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(block_comment_lang()), cx));
+    cx.set_state("ˇBody\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        let prompt_editor = editor
+            .review_annotation_prompt_editor()
+            .expect("popup should open")
+            .clone();
+        prompt_editor.update(cx, |prompt_editor, cx| {
+            prompt_editor.set_text("explain --> this case", window, cx);
+        });
+        editor.submit_review_annotation(window, cx);
+        assert!(
+            editor.review_annotation_prompt_editor().is_some(),
+            "the popup stays open so the typed comment is not lost"
+        );
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "Body\n",
+        "text carrying the terminator would close the comment early and corrupt the line"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_refuses_language_without_comment_syntax(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.set_state("plain ˇtext\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        assert!(
+            editor.review_annotation_prompt_editor().is_none(),
+            "popup should not open where a marker would not be valid source"
+        );
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "plain text\n",
+        "a bare marker is invalid source and must never be written"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_read_only_no_popup(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.set_state("locked ˇline\n");
+    cx.update_editor(|editor, _window, _cx| {
+        editor.set_read_only(true);
+    });
+
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        assert!(
+            editor.review_annotation_prompt_editor().is_none(),
+            "popup should not open in a read-only editor"
+        );
+    });
+    assert_eq!(cx.buffer_text(), "locked line\n");
+}
+
+#[gpui::test]
+async fn test_review_annotation_multiline_text_collapses_to_one_marker(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("fn main() {\n    let ˇx = 1;\n}\n");
+
+    submit_review_annotation_with_text(&mut cx, 0, "first line\n  second line\n\nthird\n");
+
+    assert_eq!(
+        cx.buffer_text(),
+        "fn main() {\n    // [ISSUE] first line second line third\n    let x = 1;\n}\n"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_custom_types(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_global::<SettingsStore, _>(|settings, cx| {
+        settings.update_user_settings(cx, |settings| {
+            settings.editor.review_annotation_types =
+                Some(vec!["blocker".to_string(), "question".to_string()]);
+        });
+    });
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("fn main() {\n    let ˇx = 1;\n}\n");
+
+    submit_review_annotation_with_text(&mut cx, 1, "why this bound");
+
+    assert_eq!(
+        cx.buffer_text(),
+        "fn main() {\n    // [QUESTION] why this bound\n    let x = 1;\n}\n"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_empty_submit_cancels(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("let ˇx = 1;\n");
+
+    submit_review_annotation_with_text(&mut cx, 0, "   \n  ");
+
+    assert_eq!(cx.buffer_text(), "let x = 1;\n");
+    cx.update_editor(|editor, _window, _cx| {
+        assert!(
+            editor.review_annotation_prompt_editor().is_none(),
+            "empty submit should cancel the popup"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_review_annotation_refuses_deleted_diff_row(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("let a = 1;\nˇlet c = 3;\n");
+    cx.set_head_text("let a = 1;\nlet b = 2;\nlet c = 3;\n");
+    executor.run_until_parked();
+
+    cx.update_editor(|editor, window, cx| {
+        editor.expand_all_diff_hunks(&ExpandAllDiffHunks, window, cx);
+    });
+    executor.run_until_parked();
+
+    cx.update_editor(|editor, window, cx| {
+        // Row 1 is the deleted `let b = 2;` the expanded hunk puts on screen.
+        editor.change_selections(Default::default(), window, cx, |s| {
+            s.select_ranges([Point::new(1, 0)..Point::new(1, 0)]);
+        });
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        assert!(
+            editor.review_annotation_prompt_editor().is_none(),
+            "a deleted row has no working-copy position, so the popup must refuse it"
+        );
+    });
+
+    let working_copy = cx.update_buffer(|buffer, _cx| buffer.text());
+    assert_eq!(
+        working_copy, "let a = 1;\nlet c = 3;\n",
+        "refusing must not touch the working copy"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_span_skips_deleted_rows(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("ˇlet a = 1;\nlet c = 3;\n");
+    cx.set_head_text("let a = 1;\nlet b = 2;\nlet c = 3;\n");
+    executor.run_until_parked();
+
+    cx.update_editor(|editor, window, cx| {
+        editor.expand_all_diff_hunks(&ExpandAllDiffHunks, window, cx);
+    });
+    executor.run_until_parked();
+
+    // Rows are 0 = `let a = 1;`, 1 = the deleted `let b = 2;`, 2 = `let c = 3;`.
+    // Selecting all three covers only two working-copy lines.
+    cx.update_editor(|editor, window, cx| {
+        editor.change_selections(Default::default(), window, cx, |s| {
+            s.select_ranges([Point::new(0, 0)..Point::new(2, 10)]);
+        });
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        let prompt_editor = editor
+            .review_annotation_prompt_editor()
+            .expect("popup should open on a writable row")
+            .clone();
+        prompt_editor.update(cx, |prompt_editor, cx| {
+            prompt_editor.set_text("covers both live rows", window, cx);
+        });
+        editor.submit_review_annotation(window, cx);
+    });
+
+    let working_copy = cx.update_buffer(|buffer, _cx| buffer.text());
+    assert_eq!(
+        working_copy, "// [ISSUE:+1] covers both live rows\nlet a = 1;\nlet c = 3;\n",
+        "the deleted row occupies a display row but no file line, so it must not widen the span"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_edits_marker_already_on_the_row(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("// [ISSUE] ˇfirst wording\nlet x = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        let prompt_editor = editor
+            .review_annotation_prompt_editor()
+            .expect("popup should open on an existing marker")
+            .clone();
+        assert_eq!(
+            prompt_editor.read(cx).text(cx),
+            "first wording",
+            "popup should be prefilled from the marker it edits"
+        );
+        prompt_editor.update(cx, |prompt_editor, cx| {
+            prompt_editor.set_text("second wording", window, cx);
+        });
+        editor.submit_review_annotation(window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "// [ISSUE] second wording\nlet x = 1;\n",
+        "editing replaces the marker instead of stacking another one"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_multi_row_selection_records_a_span(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("«let a = 1;\nlet b = 2;\nlet c = 3;ˇ»\n");
+
+    submit_review_annotation_with_text(&mut cx, 0, "whole block needs a backoff");
+
+    assert_eq!(
+        cx.buffer_text(),
+        "// [ISSUE:+2] whole block needs a backoff\nlet a = 1;\nlet b = 2;\nlet c = 3;\n",
+        "a three-row selection covers the annotated line plus two more"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_single_row_selection_records_no_span(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("«let a = 1;ˇ»\nlet b = 2;\n");
+
+    submit_review_annotation_with_text(&mut cx, 0, "just this line");
+
+    assert_eq!(
+        cx.buffer_text(),
+        "// [ISSUE] just this line\nlet a = 1;\nlet b = 2;\n"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_edit_preserves_the_span(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("// [ISSUE:+2] ˇfirst wording\nlet a = 1;\nlet b = 2;\nlet c = 3;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        let prompt_editor = editor
+            .review_annotation_prompt_editor()
+            .expect("popup should open on an existing marker")
+            .clone();
+        prompt_editor.update(cx, |prompt_editor, cx| {
+            prompt_editor.set_text("second wording", window, cx);
+        });
+        editor.submit_review_annotation(window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "// [ISSUE:+2] second wording\nlet a = 1;\nlet b = 2;\nlet c = 3;\n",
+        "editing the text must not drop the span the marker already records"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_does_not_overwrite_code_that_replaced_the_marker(
+    cx: &mut TestAppContext,
+) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("// [ISSUE] ˇoriginal\nlet keep = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        let prompt_editor = editor
+            .review_annotation_prompt_editor()
+            .expect("popup should open on the marker")
+            .clone();
+        prompt_editor.update(cx, |prompt_editor, cx| {
+            prompt_editor.set_text("revised", window, cx);
+        });
+        // The marker is gone by the time the reviewer submits, and the anchor
+        // now resolves onto ordinary code.
+        editor.buffer.update(cx, |buffer, cx| {
+            buffer.edit(
+                [(Point::new(0, 0)..Point::new(1, 0), "let stolen = 2;\n")],
+                None,
+                cx,
+            );
+        });
+        editor.submit_review_annotation(window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "// [ISSUE] revised\nlet stolen = 2;\nlet keep = 1;\n",
+        "the comment must be inserted above the code, never written over it"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_edit_keeps_a_doc_comment_leader(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("/// [NOTE] ˇfirst wording\nlet x = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.insert_review_annotation(&InsertReviewAnnotation, window, cx);
+        let prompt_editor = editor
+            .review_annotation_prompt_editor()
+            .expect("popup should open on the marker")
+            .clone();
+        prompt_editor.update(cx, |prompt_editor, cx| {
+            prompt_editor.set_text("second wording", window, cx);
+        });
+        editor.submit_review_annotation(window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "/// [NOTE] second wording\nlet x = 1;\n",
+        "editing must not demote a doc comment to a plain one"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_delete_removes_whole_marker_line(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("// [NOTE] ˇtransient\nlet x = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.delete_review_annotation(&DeleteReviewAnnotation, window, cx);
+    });
+
+    assert_eq!(cx.buffer_text(), "let x = 1;\n");
+}
+
+#[gpui::test]
+async fn test_review_annotation_recognizes_a_doc_comment_leader(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    // Rust lists "// " before "/// ", so a shortest-first strip would leave a
+    // stray slash and fail to recognize the marker.
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("/// [NOTE] ˇon a doc comment\nlet x = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.delete_review_annotation(&DeleteReviewAnnotation, window, cx);
+    });
+
+    assert_eq!(cx.buffer_text(), "let x = 1;\n");
+}
+
+#[gpui::test]
+async fn test_review_annotation_ignores_a_bare_bracket_line(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("[NOTE] ˇnot a comment, just text\nlet x = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.delete_review_annotation(&DeleteReviewAnnotation, window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "[NOTE] not a comment, just text\nlet x = 1;\n",
+        "a marker needs a comment leader, or ordinary lines become deletable"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_delete_leaves_ordinary_lines_alone(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("// see the [ISSUE] ˇtracker\nlet x = 1;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.delete_review_annotation(&DeleteReviewAnnotation, window, cx);
+    });
+
+    assert_eq!(
+        cx.buffer_text(),
+        "// see the [ISSUE] tracker\nlet x = 1;\n",
+        "a marker mentioned mid sentence is prose, not an annotation"
+    );
+}
+
+#[gpui::test]
+async fn test_review_annotation_navigation(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(rust_lang()), cx));
+    cx.set_state("ˇlet a = 1;\n// [ISSUE] first\nlet b = 2;\n// [NOTE] second\nlet c = 3;\n");
+
+    cx.update_editor(|editor, window, cx| {
+        editor.go_to_next_review_annotation(&GoToNextReviewAnnotation, window, cx);
+    });
+    cx.update_editor(|editor, _window, cx| {
+        let snapshot = editor.display_snapshot(cx);
+        assert_eq!(editor.selections.newest::<Point>(&snapshot).head().row, 1);
+    });
+
+    cx.update_editor(|editor, window, cx| {
+        editor.go_to_next_review_annotation(&GoToNextReviewAnnotation, window, cx);
+    });
+    cx.update_editor(|editor, _window, cx| {
+        let snapshot = editor.display_snapshot(cx);
+        assert_eq!(editor.selections.newest::<Point>(&snapshot).head().row, 3);
+    });
+
+    cx.update_editor(|editor, window, cx| {
+        editor.go_to_previous_review_annotation(&GoToPreviousReviewAnnotation, window, cx);
+    });
+    cx.update_editor(|editor, _window, cx| {
+        let snapshot = editor.display_snapshot(cx);
+        assert_eq!(editor.selections.newest::<Point>(&snapshot).head().row, 1);
+    });
+}
+
 #[gpui::test]
 fn test_diff_review_overlay_show_and_dismiss(cx: &mut TestAppContext) {
     init_test(cx, |_| {});

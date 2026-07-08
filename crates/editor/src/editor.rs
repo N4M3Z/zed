@@ -38,6 +38,7 @@ mod lsp_ext;
 mod mouse_context_menu;
 pub mod movement;
 mod persistence;
+mod review_annotation;
 mod runnables;
 mod rust_analyzer_ext;
 pub mod scroll;
@@ -128,6 +129,7 @@ pub use multi_buffer::{
     MultiBufferOffset, MultiBufferOffsetUtf16, MultiBufferSnapshot, PathKey, RowInfo, ToOffset,
     ToPoint,
 };
+use review_annotation::ReviewAnnotationPopup;
 pub use split::{DiffStyleControls, SplittableEditor, ToggleSplitDiff};
 pub use split_editor_view::SplitEditorView;
 pub use text::Bias;
@@ -1124,6 +1126,8 @@ pub struct Editor {
     stored_review_comments: Vec<(DiffHunkKey, Vec<StoredReviewComment>)>,
     /// Counter for generating unique comment IDs.
     next_review_comment_id: usize,
+    /// The active review annotation input popup, if any.
+    review_annotation_popup: Option<ReviewAnnotationPopup>,
     hovered_diff_hunk_row: Option<DisplayRow>,
     pull_diagnostics_task: Task<()>,
     in_project_search: bool,
@@ -2411,6 +2415,7 @@ impl Editor {
             diff_review_overlays: Vec::new(),
             stored_review_comments: Vec::new(),
             next_review_comment_id: 0,
+            review_annotation_popup: None,
             hovered_diff_hunk_row: None,
             _subscriptions: (!is_minimap)
                 .then(|| {

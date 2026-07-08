@@ -158,6 +158,11 @@ pub struct EditorSettingsContent {
     ///
     /// Default: true
     pub search_wrap: Option<bool>,
+    /// Review annotation comment types, in popup cycle order. The first
+    /// entry is the type initially selected. Values are uppercased.
+    ///
+    /// Default: ["ISSUE", "SUGGESTION", "NOTE", "PRAISE"]
+    pub review_annotation_types: Option<Vec<String>>,
 
     /// Defaults to use when opening a new buffer and project search items.
     ///

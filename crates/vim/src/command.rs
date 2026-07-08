@@ -1522,6 +1522,7 @@ fn generate_commands(_: &App) -> Vec<VimCommand> {
             .filename(|_action, filename| Some(VimEdit { filename }.boxed_clone())),
         VimCommand::new(("tabnew", ""), workspace::NewFile)
             .filename(|_action, filename| Some(VimEdit { filename }.boxed_clone())),
+        VimCommand::new(("annotate", ""), editor::actions::InsertReviewAnnotation),
         VimCommand::new(
             ("q", "uit"),
             workspace::CloseActiveItem {

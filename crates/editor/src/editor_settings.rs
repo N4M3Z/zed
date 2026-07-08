@@ -49,6 +49,7 @@ pub struct EditorSettings {
     pub middle_click_paste: bool,
     pub double_click_in_multibuffer: DoubleClickInMultibuffer,
     pub search_wrap: bool,
+    pub review_annotation_types: Vec<String>,
     pub search: SearchSettings,
     pub auto_signature_help: bool,
     pub show_signature_help_after_edits: bool,
@@ -288,6 +289,7 @@ impl Settings for EditorSettings {
             middle_click_paste: editor.middle_click_paste.unwrap(),
             double_click_in_multibuffer: editor.double_click_in_multibuffer.unwrap(),
             search_wrap: editor.search_wrap.unwrap(),
+            review_annotation_types: editor.review_annotation_types.unwrap_or_default(),
             search: SearchSettings {
                 button: search.button.unwrap(),
                 whole_word: search.whole_word.unwrap(),
