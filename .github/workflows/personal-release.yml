@@ -1,0 +1,68 @@
+# Builds the personal Zed Dev bundle from a fork ref and publishes it as a
+# GitHub release. Dispatch-driven rather than tag-triggered: tag triggers read
+# the workflow from the tagged commit, and dev-build is regenerated on every
+# rebuild, so a tag would never carry this file.
+#
+#   gh workflow run personal-release.yml --ref personal-ci \
+#       -f ref=dev-build -f version=1.13.3-personal.2
+#
+# A cold hosted-runner build takes one to two hours. The release is created as
+# a draft; publish it after the checksum is confirmed, then bump the cask in
+# N4M3Z/homebrew-tap.
+name: personal-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Fork ref to build (branch, tag, or commit)
+        default: dev-build
+        required: true
+      version:
+        description: Release version without the leading v (e.g. 1.13.3-personal.2)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bundle-mac:
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # The dev channel keeps the bundle identity dev.zed.Zed-Dev regardless
+      # of what the ref carries, so the artifact never collides with the
+      # official Zed or Zed Preview apps.
+      - name: Force the dev release channel
+        run: printf 'dev\n' > crates/zed/RELEASE_CHANNEL
+
+      # No MACOS_CERTIFICATE secret exists on this fork, so bundle-mac falls
+      # back to ad-hoc signing, same as the local build. The cask caveat
+      # covers clearing quarantine.
+      - name: Bundle
+        run: ./script/bundle-mac aarch64-apple-darwin
+
+      - name: Checksum
+        run: shasum -a 256 target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target "$(git rev-parse HEAD)" \
+            --title "Zed Dev ${{ inputs.version }}" \
+            --draft \
+            --notes "Personal Zed build (preview line + patch stack), built by CI from ${{ inputs.ref }}. Apple silicon only, ad-hoc signed." \
+            "target/aarch64-apple-darwin/release/Zed-aarch64.dmg#Zed-aarch64.dmg"
