@@ -64,7 +64,16 @@ jobs:
           git checkout -B integration "upstream/${preview}"
           git -c user.name=ci -c user.email=ci@local \
             cherry-pick "${base}..${{ inputs.stack }}"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          {
+            echo "preview=${preview}"
+            echo "preview_sha=$(git rev-parse "upstream/${preview}")"
+            echo "integration_sha=$(git rev-parse HEAD)"
+            # The release is tagged against the stack head, which is a real
+            # commit on this fork. The integration itself cannot be pushed:
+            # it carries upstream's .github/workflows, and GITHUB_TOKEN is
+            # refused on any push that touches workflow files.
+            echo "stack_sha=$(git rev-parse "origin/${{ inputs.stack }}")"
+          } >> "$GITHUB_OUTPUT"
 
       # Keeps the bundle identity dev.zed.Zed-Dev, so the artifact never
       # collides with the official Zed or Zed Preview apps.
@@ -85,8 +94,13 @@ jobs:
           echo "sha256: ${sum}"
           echo "sha256=${sum}" >> "$GITHUB_OUTPUT"
 
-      - name: Push the integration for provenance
-        run: git push --force origin integration:dev-build-ci
+      # Kept ahead of the release step so a failure there never discards the
+      # build; the DMG can be pulled from the run and released by hand.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zed-aarch64.dmg
+          path: target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+          if-no-files-found: error
 
       - name: Create release
         env:
@@ -94,12 +108,19 @@ jobs:
         run: |
           gh release create "v${{ inputs.version }}" \
             --repo "${{ github.repository }}" \
-            --target "${{ steps.integrate.outputs.sha }}" \
+            --target "${{ steps.integrate.outputs.stack_sha }}" \
             --title "Zed Dev ${{ inputs.version }}" \
             ${{ inputs.draft && '--draft' || '' }} \
             --notes "Personal Zed build: the patch stack replayed onto the current upstream preview tip by CI.
 
-          sha256: \`${{ steps.checksum.outputs.sha256 }}\`
+          | | |
+          | --- | --- |
+          | stack | \`${{ inputs.stack }}\` at \`${{ steps.integrate.outputs.stack_sha }}\` |
+          | preview base | \`${{ steps.integrate.outputs.preview }}\` at \`${{ steps.integrate.outputs.preview_sha }}\` |
+          | integration | \`${{ steps.integrate.outputs.integration_sha }}\` (built on the runner, not pushed) |
+          | sha256 | \`${{ steps.checksum.outputs.sha256 }}\` |
+
+          The tag points at the patch stack; the integration commit exists only in the build, because GITHUB_TOKEN may not push a tree containing workflow files.
 
           Apple silicon only. Ad-hoc signed, so macOS quarantines it; the cask caveat explains how to clear it." \
             "target/aarch64-apple-darwin/release/Zed-aarch64.dmg#Zed-aarch64.dmg"
