@@ -1,26 +1,33 @@
-# Builds the personal Zed Dev bundle from a fork ref and publishes it as a
-# GitHub release. Dispatch-driven rather than tag-triggered: tag triggers read
-# the workflow from the tagged commit, and dev-build is regenerated on every
-# rebuild, so a tag would never carry this file.
+# Builds the personal Zed Dev bundle and publishes it as a GitHub release.
 #
-#   gh workflow run personal-release.yml --ref personal-ci \
-#       -f ref=dev-build -f version=1.13.3-personal.2
+# The integration is done here rather than pushed from a laptop: the local
+# `sd zed rebuild` recreates its dev-build change on every run, and pushing it
+# needs a hardware key, so it can never be a reliable CI input. Instead this
+# job replays the patch stack onto the newest upstream preview tip using only
+# refs that are already on the fork, which is the same operation the local
+# script performs with `jj duplicate`.
+#
+#   gh workflow run personal-release.yml -f version=1.14.1-personal.2
 #
 # A cold hosted-runner build takes one to two hours. The release is created as
-# a draft; publish it after the checksum is confirmed, then bump the cask in
+# a draft; publish it once the checksum is confirmed, then bump the cask in
 # N4M3Z/homebrew-tap.
 name: personal-release
 
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: Fork ref to build (branch, tag, or commit)
-        default: dev-build
+      stack:
+        description: Fork branch holding the patch stack
+        default: zed-personal
         required: true
       version:
-        description: Release version without the leading v (e.g. 1.13.3-personal.2)
+        description: Release version without the leading v (e.g. 1.14.1-personal.2)
         required: true
+      draft:
+        description: Create the release as a draft
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -28,41 +35,71 @@ permissions:
 jobs:
   bundle-mac:
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.stack }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
 
-      # The dev channel keeps the bundle identity dev.zed.Zed-Dev regardless
-      # of what the ref carries, so the artifact never collides with the
-      # official Zed or Zed Preview apps.
+      - name: Replay the patch stack onto the newest preview tip
+        id: integrate
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/zed-industries/zed.git
+          preview=$(git ls-remote --heads upstream 'refs/heads/v*.x' \
+            | awk -F'refs/heads/' '{print $2}' | sort -V | tail -1)
+          echo "preview branch: ${preview}"
+          git fetch --no-tags upstream "${preview}" main
+          # The stack's own commits are everything the branch has that upstream
+          # main does not; replay exactly those onto the preview tip.
+          base=$(git merge-base upstream/main "${{ inputs.stack }}")
+          git log --oneline "${base}..${{ inputs.stack }}"
+          git checkout -B integration "upstream/${preview}"
+          git -c user.name=ci -c user.email=ci@local \
+            cherry-pick "${base}..${{ inputs.stack }}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Keeps the bundle identity dev.zed.Zed-Dev, so the artifact never
+      # collides with the official Zed or Zed Preview apps.
       - name: Force the dev release channel
         run: printf 'dev\n' > crates/zed/RELEASE_CHANNEL
 
-      # No MACOS_CERTIFICATE secret exists on this fork, so bundle-mac falls
-      # back to ad-hoc signing, same as the local build. The cask caveat
-      # covers clearing quarantine.
+      # No signing secrets exist on this fork, so bundle-mac falls back to
+      # ad-hoc signing exactly like the local build. The cask caveat covers
+      # clearing quarantine on the installing machine.
       - name: Bundle
         run: ./script/bundle-mac aarch64-apple-darwin
 
       - name: Checksum
-        run: shasum -a 256 target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+        id: checksum
+        run: |
+          dmg=target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+          sum=$(shasum -a 256 "$dmg" | cut -d' ' -f1)
+          echo "sha256: ${sum}"
+          echo "sha256=${sum}" >> "$GITHUB_OUTPUT"
 
-      - name: Create draft release
+      - name: Push the integration for provenance
+        run: git push --force origin integration:dev-build-ci
+
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v${{ inputs.version }}" \
             --repo "${{ github.repository }}" \
-            --target "$(git rev-parse HEAD)" \
+            --target "${{ steps.integrate.outputs.sha }}" \
             --title "Zed Dev ${{ inputs.version }}" \
-            --draft \
-            --notes "Personal Zed build (preview line + patch stack), built by CI from ${{ inputs.ref }}. Apple silicon only, ad-hoc signed." \
+            ${{ inputs.draft && '--draft' || '' }} \
+            --notes "Personal Zed build: the patch stack replayed onto the current upstream preview tip by CI.
+
+          sha256: \`${{ steps.checksum.outputs.sha256 }}\`
+
+          Apple silicon only. Ad-hoc signed, so macOS quarantines it; the cask caveat explains how to clear it." \
             "target/aarch64-apple-darwin/release/Zed-aarch64.dmg#Zed-aarch64.dmg"
